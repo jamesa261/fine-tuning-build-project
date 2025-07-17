@@ -5,6 +5,7 @@ transformers[torch]
 sentence-transformers[train]
 torch
 tensorboard
+dotenv
 
 matplotlib
 scikit-learn
