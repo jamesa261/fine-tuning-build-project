@@ -1,0 +1,31 @@
+stages:
+  synthetic_data:
+    cmd: python -m synthetic_data.generate --params params.yaml
+    deps:
+      - params.yaml
+      - synthetic_data/generate.py
+      - synthetic_data/clients.py
+      - synthetic_data/models.py
+      - synthetic_data/data/seed_titles.csv
+    outs:
+      - synthetic_data/data/jitter_responses.jsonl
+      - synthetic_data/data/jittered_titles.csv
+    metrics:
+      - synthetic_data/metrics/jitter_summary.json
+
+  fine_tuning:
+    cmd: python -m fine_tuning.train --params params.yaml
+    deps:
+      - params.yaml
+      - fine_tuning/train.py
+      - fine_tuning/visualize_embedding_space.py
+      - synthetic_data/data/jittered_titles.csv
+    outs:
+      - fine_tuning/data/datasets/train_ds.csv
+      - fine_tuning/data/datasets/val_ds.csv
+      - fine_tuning/data/datasets/test_ds.csv
+      - fine_tuning/data/trained_models
+    metrics:
+      - fine_tuning/metrics/training.json
+    plots:
+      - fine_tuning/plots/embedding_tsne.png

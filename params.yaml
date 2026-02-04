@@ -1,0 +1,32 @@
+synthetic_data:
+  model: gpt-5-mini
+  api_key_env: null  # default inferred from provider
+  num_examples_per_title: 10
+  temperature: null
+  reasoning_effort: minimal
+  max_retries: 6
+  retry_backoff: 5.0
+  max_concurrent: 300
+  seed: 42
+  output_responses: synthetic_data/data/jitter_responses.jsonl
+  output_titles: synthetic_data/data/jittered_titles.csv
+  metrics_path: synthetic_data/metrics/jitter_summary.json
+
+fine_tuning:
+  base_model: sentence-transformers/all-MiniLM-L6-v2
+  jitter_path: synthetic_data/data/jittered_titles.csv
+  num_epochs: 5
+  train_batch_size: 192
+  negatives_per_positive: 5
+  evals_per_epoch: 4
+  val_fraction: 0.2
+  test_fraction: 0.1
+  random_seed: 42
+  max_steps: null  # auto-computed from dataset if null
+  tsne_subset_size: 500
+  tsne_perplexity: 20
+  tsne_learning_rate: 200
+  tsne_n_iter: 1000
+  model_save_dir: fine_tuning/data/trained_models
+  metrics_path: fine_tuning/metrics/training.json
+  plot_path: fine_tuning/plots/embedding_tsne.png
