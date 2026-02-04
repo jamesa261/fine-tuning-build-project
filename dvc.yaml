@@ -1,8 +1,9 @@
 stages:
   synthetic_data:
     cmd: python -m synthetic_data.generate --params params.yaml
+    params:
+      - synthetic_data
     deps:
-      - params.yaml
       - synthetic_data/generate.py
       - synthetic_data/clients.py
       - synthetic_data/models.py
@@ -15,8 +16,9 @@ stages:
 
   fine_tuning:
     cmd: python -m fine_tuning.train --params params.yaml
+    params:
+      - fine_tuning
     deps:
-      - params.yaml
       - fine_tuning/train.py
       - fine_tuning/visualize_embedding_space.py
       - synthetic_data/data/jittered_titles.csv

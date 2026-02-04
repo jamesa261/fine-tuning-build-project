@@ -8,6 +8,7 @@ from typing import Dict
 import numpy as np
 import pandas as pd
 import torch
+from torch.utils.data import Dataset as TorchDataset
 from datasets import Dataset, IterableDataset, Features, Value
 from sentence_transformers import (
     SentenceTransformer,
@@ -15,6 +16,7 @@ from sentence_transformers import (
     SentenceTransformerTrainingArguments,
     losses,
 )
+from sentence_transformers.data_collator import SentenceTransformerDataCollator
 import matplotlib
 
 matplotlib.use("Agg")
@@ -25,6 +27,7 @@ from sklearn.manifold import TSNE
 DEFAULT_PARAMS = {
     "base_model": "sentence-transformers/all-MiniLM-L6-v2",
     "jitter_path": "synthetic_data/data/jittered_titles.csv",
+    "dynamic_negatives": True,
     "num_epochs": 5,
     "train_batch_size": 192,
     "negatives_per_positive": 5,
@@ -34,6 +37,7 @@ DEFAULT_PARAMS = {
     "random_seed": 42,
     "max_steps": None,
     "tsne_subset_size": 500,
+    "tsne_label_subset": 20,
     "tsne_perplexity": 20,
     "tsne_learning_rate": 200,
     "tsne_n_iter": 1000,
@@ -94,8 +98,31 @@ def clean_title(title: str) -> str:
     return max((abbreviated_title, un_abbreviated_title), key=len)
 
 
-def build_train_dataset(train_df: pd.DataFrame, take_longest_variant: bool = True):
-    rng = np.random.default_rng()
+class DynamicTripletDataset(TorchDataset):
+    """PyTorch dataset that resamples negatives on every __getitem__ call."""
+
+    def __init__(self, anchors, positives, seed_titles, seed: int):
+        self.anchors = anchors
+        self.positives = positives
+        self.seed_titles = seed_titles
+        self.rng = np.random.default_rng(seed)
+
+    def __len__(self):
+        return len(self.anchors)
+
+    def __getitem__(self, idx):
+        positive = self.positives[idx]
+        neg_pool = self.seed_titles[self.seed_titles != positive]
+        negative = self.rng.choice(neg_pool)
+        return {"anchor": self.anchors[idx], "positive": positive, "negative": negative}
+    
+    @property
+    def column_names(self):
+        # minimal interface expected by SentenceTransformerTrainer
+        return ["anchor", "positive", "negative"]
+
+
+def build_train_dataset(train_df: pd.DataFrame, take_longest_variant: bool = True, dynamic_negatives: bool = True, seed: int = 42):
     df = train_df.copy()
     if take_longest_variant:
         df["seed_title"] = df["seed_title"].apply(clean_title)
@@ -104,30 +131,17 @@ def build_train_dataset(train_df: pd.DataFrame, take_longest_variant: bool = Tru
     positives = df["seed_title"].to_numpy()
     seed_titles = df["seed_title"].unique()
 
-    negative_indices_list = [
-        np.arange(len(seed_titles))[seed_titles != positive] for positive in positives
-    ]
+    if dynamic_negatives:
+        return DynamicTripletDataset(anchors, positives, seed_titles, seed=seed)
 
-    def generator():
-        indices = list(range(len(anchors)))
-        while True:
-            rng.shuffle(indices)
-            for idx in indices:
-                negative_idx = rng.choice(negative_indices_list[idx])
-                yield {
-                    "anchor": anchors[idx],
-                    "positive": positives[idx],
-                    "negative": seed_titles[negative_idx],
-                }
+    rng = np.random.default_rng(seed)
+    negatives = [rng.choice(seed_titles[seed_titles != pos]) for pos in positives]
 
-    return (
-        IterableDataset.from_generator(
-            generator,
-            features=Features(
-                {"anchor": Value("string"), "positive": Value("string"), "negative": Value("string")}
-            ),
-        ).with_format(None)
+    triplets = pd.DataFrame(
+        {"anchor": anchors, "positive": positives, "negative": negatives},
+        columns=["anchor", "positive", "negative"],
     )
+    return Dataset.from_pandas(triplets, preserve_index=False)
 
 
 def build_val_dataset(val_df: pd.DataFrame, negatives_per_positive: int, seed: int):
@@ -148,7 +162,8 @@ def build_val_dataset(val_df: pd.DataFrame, negatives_per_positive: int, seed: i
         for negative in negatives:
             examples.append({"anchor": anchor, "positive": positive, "negative": negative})
 
-    return Dataset.from_list(examples).with_format(None)
+    ds = Dataset.from_list(examples)
+    return ds.select_columns(["anchor", "positive", "negative"]).with_format(None)
 
 
 def compute_triplet_metrics(model: SentenceTransformer, df: pd.DataFrame, seed: int):
@@ -161,22 +176,55 @@ def compute_triplet_metrics(model: SentenceTransformer, df: pd.DataFrame, seed: 
     negatives = [rng.choice(seed_titles[seed_titles != p]) for p in positives]
 
     all_text = anchors + positives + negatives
-    embeddings = model.encode(
+    # Compute both normalized (cosine) and raw embeddings for consistency checks
+    emb_norm = model.encode(
         all_text, normalize_embeddings=True, convert_to_tensor=True, show_progress_bar=False
     )
+    emb_raw = model.encode(
+        all_text, normalize_embeddings=False, convert_to_tensor=True, show_progress_bar=False
+    )
     n = len(anchors)
-    anchor_emb = embeddings[:n]
-    positive_emb = embeddings[n : 2 * n]
-    negative_emb = embeddings[2 * n :]
+    anchor_norm, positive_norm, negative_norm = emb_norm[:n], emb_norm[n : 2 * n], emb_norm[2 * n :]
+    anchor_raw, positive_raw, negative_raw = emb_raw[:n], emb_raw[n : 2 * n], emb_raw[2 * n :]
 
-    pos_sim = torch.sum(anchor_emb * positive_emb, dim=1)
-    neg_sim = torch.sum(anchor_emb * negative_emb, dim=1)
-    margin = (pos_sim - neg_sim).mean().item()
+    pos_sim = torch.sum(anchor_norm * positive_norm, dim=1)
+    neg_sim = torch.sum(anchor_norm * negative_norm, dim=1)
+    cos_margin = (pos_sim - neg_sim).mean().item()
+
+    pos_dist = torch.linalg.norm(anchor_raw - positive_raw, dim=1)
+    neg_dist = torch.linalg.norm(anchor_raw - negative_raw, dim=1)
+    euclid_margin = (neg_dist - pos_dist).mean().item()
     return {
-        "positive_similarity_mean": pos_sim.mean().item(),
-        "negative_similarity_mean": neg_sim.mean().item(),
-        "avg_margin": margin,
+        "cosine_positive_mean": pos_sim.mean().item(),
+        "cosine_negative_mean": neg_sim.mean().item(),
+        "cosine_margin": cos_margin,
+        "euclidean_positive_mean": pos_dist.mean().item(),
+        "euclidean_negative_mean": neg_dist.mean().item(),
+        "euclidean_margin": euclid_margin,
     }
+
+
+class OrderedTripletCollator:
+    """
+    Wrapper to guarantee anchor/positive/negative column order before tokenization.
+    Prevents datasets with alphabetized columns from swapping positive/negative.
+    """
+
+    def __init__(self, base_collator: SentenceTransformerDataCollator, order=("anchor", "positive", "negative")):
+        self.base_collator = base_collator
+        self.order_index = {name: idx for idx, name in enumerate(order)}
+        # passthrough attributes used by Trainer for dataloader setup
+        self.valid_label_columns = getattr(base_collator, "valid_label_columns", [])
+        self.router_mapping = getattr(base_collator, "router_mapping", {})
+        self.prompts = getattr(base_collator, "prompts", {})
+        self.include_prompt_lengths = getattr(base_collator, "include_prompt_lengths", False)
+
+    def __call__(self, features):
+        def sort_key(key: str):
+            return self.order_index.get(key, len(self.order_index))
+
+        reordered = [{k: f[k] for k in sorted(f.keys(), key=sort_key)} for f in features]
+        return self.base_collator(reordered)
 
 
 def tsne_plot(
@@ -185,9 +233,15 @@ def tsne_plot(
     test_df: pd.DataFrame,
     params: Dict,
 ):
-    subset = test_df.sample(
-        min(params["tsne_subset_size"], len(test_df)), random_state=params["random_seed"]
+    rng = np.random.default_rng(params["random_seed"])
+    all_labels = test_df["seed_title"].unique().tolist()
+    chosen_labels = set(
+        rng.choice(all_labels, size=min(params["tsne_label_subset"], len(all_labels)), replace=False)
     )
+    subset = test_df[test_df["seed_title"].isin(chosen_labels)]
+    if len(subset) > params["tsne_subset_size"]:
+        subset = subset.sample(params["tsne_subset_size"], random_state=params["random_seed"])
+
     titles = subset["jittered_title"].tolist()
     labels = subset["seed_title"].tolist()
 
@@ -202,7 +256,7 @@ def tsne_plot(
         n_components=2,
         perplexity=params["tsne_perplexity"],
         learning_rate=params["tsne_learning_rate"],
-        n_iter=params["tsne_n_iter"],
+        max_iter=params["tsne_n_iter"],
         random_state=params["random_seed"],
         init="random",
     )
@@ -247,11 +301,27 @@ def train(params: Dict):
         jitter_df, params["val_fraction"], params["test_fraction"], seed=params["random_seed"]
     )
 
-    train_ds = build_train_dataset(train_df)
+    train_ds = build_train_dataset(
+        train_df,
+        dynamic_negatives=params.get("dynamic_negatives", True),
+        seed=params["random_seed"],
+    )
+    # Trainer expects Datasets to expose features/column_names; wrap torch Dataset in iterable if needed
+    if isinstance(train_ds, TorchDataset):
+        train_ds = Dataset.from_generator(
+            lambda: (train_ds[i] for i in range(len(train_ds))),
+            features=Features(
+                {"anchor": Value("string"), "positive": Value("string"), "negative": Value("string")}
+            ),
+        )
     val_ds = build_val_dataset(val_df, params["negatives_per_positive"], params["random_seed"])
 
     base_model = SentenceTransformer(params["base_model"], device=str(device))
-    train_loss = losses.TripletLoss(model=base_model, triplet_margin=0.3)
+    train_loss = losses.TripletLoss(
+        model=base_model,
+        distance_metric=losses.TripletDistanceMetric.COSINE,
+        triplet_margin=0.1,
+    )
 
     steps_per_epoch = max(1, len(train_df) // params["train_batch_size"])
     eval_steps = max(1, steps_per_epoch // max(1, params["evals_per_epoch"]))
@@ -274,6 +344,7 @@ def train(params: Dict):
         save_total_limit=2,
         logging_steps=eval_steps,
         report_to="tensorboard",
+        dataloader_pin_memory=torch.cuda.is_available(),
     )
 
     trainer = SentenceTransformerTrainer(
@@ -282,6 +353,10 @@ def train(params: Dict):
         train_dataset=train_ds,
         eval_dataset=val_ds,
         loss=train_loss,
+        data_collator=OrderedTripletCollator(
+            SentenceTransformerDataCollator(tokenize_fn=base_model.tokenize),
+            order=("anchor", "positive", "negative"),
+        ),
     )
 
     trainer.train()
