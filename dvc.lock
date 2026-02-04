@@ -68,10 +68,10 @@ stages:
           base_model: sentence-transformers/all-MiniLM-L6-v2
           jitter_path: synthetic_data/data/jittered_titles.csv
           dynamic_negatives: true
-          num_epochs: 5
+          num_epochs: 15
           train_batch_size: 192
           negatives_per_positive: 5
-          evals_per_epoch: 4
+          evals_per_epoch: 2
           val_fraction: 0.2
           test_fraction: 0.1
           random_seed: 42
@@ -98,14 +98,59 @@ stages:
       size: 1295015
     - path: fine_tuning/data/trained_models
       hash: md5
-      md5: baa36c535454a36d525e05740f67dcd7.dir
-      size: 636068905
+      md5: 70f84d8d027a65bb5074635e7a1a2125.dir
+      size: 636083225
       nfiles: 39
     - path: fine_tuning/metrics/training.json
       hash: md5
-      md5: b598b82a9ba0462b52eacd31c56900a3
-      size: 489
+      md5: 41f0de1e0a3be1f8e53bf85e057d920a
+      size: 488
     - path: fine_tuning/plots/embedding_tsne.png
       hash: md5
-      md5: cda67e487f3a2e374df39b28d06c739c
-      size: 219479
+      md5: c19a0409ed618cd3fd81248f0ad28b7d
+      size: 218999
+  publish_model:
+    cmd: "python -c \"from pathlib import Path; import shutil; src=Path('fine_tuning/data/trained_models');
+      dst=Path('streamlit_app/data/fine_tuned_model'); shutil.rmtree(dst) if dst.exists()
+      else None; shutil.copytree(src, dst); print(f'Copied {src} -> {dst}')\"\n"
+    deps:
+    - path: fine_tuning/data/trained_models
+      hash: md5
+      md5: 70f84d8d027a65bb5074635e7a1a2125.dir
+      size: 636083225
+      nfiles: 39
+    - path: fine_tuning/metrics/training.json
+      hash: md5
+      md5: 41f0de1e0a3be1f8e53bf85e057d920a
+      size: 488
+    outs:
+    - path: streamlit_app/data/fine_tuned_model
+      hash: md5
+      md5: 70f84d8d027a65bb5074635e7a1a2125.dir
+      size: 636083225
+      nfiles: 39
+  prepare_embeddings:
+    cmd: python streamlit_app/prepare_embeddings.py
+    deps:
+    - path: streamlit_app/data/fine_tuned_model
+      hash: md5
+      md5: 70f84d8d027a65bb5074635e7a1a2125.dir
+      size: 636083225
+      nfiles: 39
+    - path: streamlit_app/data/job_postings.parquet
+      hash: md5
+      md5: e4f9b3738201cc19c56b717fcff34415
+      size: 9216633
+    - path: streamlit_app/prepare_embeddings.py
+      hash: md5
+      md5: 2693c333a3d92bc29fd052dcbf2767e2
+      size: 1821
+    outs:
+    - path: streamlit_app/data/default_embeddings.npy
+      hash: md5
+      md5: 3da40ccfa188f0986ba3c062d240c4de
+      size: 172030592
+    - path: streamlit_app/data/fine_tuned_embeddings.npy
+      hash: md5
+      md5: 3b03c18c608919a39999fae64dab9207
+      size: 172030592

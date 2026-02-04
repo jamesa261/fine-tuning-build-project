@@ -31,3 +31,27 @@ stages:
       - fine_tuning/metrics/training.json
     plots:
       - fine_tuning/plots/embedding_tsne.png
+
+  publish_model:
+    cmd: >
+      python -c "from pathlib import Path; import shutil;
+      src=Path('fine_tuning/data/trained_models');
+      dst=Path('streamlit_app/data/fine_tuned_model');
+      shutil.rmtree(dst) if dst.exists() else None;
+      shutil.copytree(src, dst);
+      print(f'Copied {src} -> {dst}')"
+    deps:
+      - fine_tuning/data/trained_models
+      - fine_tuning/metrics/training.json
+    outs:
+      - streamlit_app/data/fine_tuned_model
+
+  prepare_embeddings:
+    cmd: python streamlit_app/prepare_embeddings.py
+    deps:
+      - streamlit_app/prepare_embeddings.py
+      - streamlit_app/data/job_postings.parquet
+      - streamlit_app/data/fine_tuned_model
+    outs:
+      - streamlit_app/data/default_embeddings.npy
+      - streamlit_app/data/fine_tuned_embeddings.npy

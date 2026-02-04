@@ -16,10 +16,10 @@ fine_tuning:
   base_model: sentence-transformers/all-MiniLM-L6-v2
   jitter_path: synthetic_data/data/jittered_titles.csv
   dynamic_negatives: true
-  num_epochs: 5
+  num_epochs: 15
   train_batch_size: 192
   negatives_per_positive: 5
-  evals_per_epoch: 4
+  evals_per_epoch: 2
   val_fraction: 0.2
   test_fraction: 0.1
   random_seed: 42
