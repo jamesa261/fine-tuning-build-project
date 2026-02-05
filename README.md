@@ -34,8 +34,8 @@ To set this up, run:
 ```bash
 uv venv --python=3.13.11
 source .venv/bin/activate
-uv pip compile requirements.in -o requirements.txt --torch-backed=auto
-uv pip sync requirements.txt
+uv pip compile requirements.in -o requirements.txt --torch-backend=auto
+uv pip sync requirements.txt --torch-backend=auto
 ```
 
 Environment:
