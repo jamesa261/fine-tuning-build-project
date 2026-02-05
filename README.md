@@ -20,9 +20,13 @@ Generate synthetic job titles, train a sentence-transformer on them, and ship ar
 
 Run the whole chain:  
 ```bash
-dvc repro prepare_embeddings
-```  
-*(Do **not** run generation/training if you want to avoid LLM calls—those stages are cached; rerun only when keys/quotas are set and you intend to bill.)*
+dvc repro
+```
+
+Run a specific stage (+ preceding dependencies)
+```bash
+dvc repro fine_tuning
+```
 
 ## Setup
 Using a uv (https://docs.astral.sh/uv/) managed virtual environment is recommended.
@@ -42,21 +46,4 @@ Environment:
 ## Key Scripts
 - `synthetic_data/generate.py`: async LLM generation with JSON outputs, supports OpenAI & Gemini/Gemma. Configurable via `params.yaml`.
 - `fine_tuning/train.py`: dynamic-negative triplet training (cosine margin), metrics JSON, t-SNE plot.
-- `streamlit_app/prepare_embeddings.py`: builds baseline and fine-tuned embeddings for the demo.
-
-## Useful Commands
-```bash
-# Reproduce only training (uses cached synthetic data)
-dvc repro fine_tuning
-
-# Publish trained model + embeddings (after training)
-dvc repro publish_model prepare_embeddings
-
-# Clean DVC outputs (careful)
-dvc remove --outs
-```
-
-## Notes & Cautions
-- LLM stages will call external APIs; ensure keys/quotas and be mindful of cost.
-- Temperature defaults to `null` for reasoning models; `reasoning_effort` is configurable in `params.yaml`.
-- Dynamic negatives are enabled by default; disable with `dynamic_negatives: false` in `params.yaml` if you prefer static triplets.
+- `streamlit_app/prepare_embeddings.py`: builds baseline and fine-tuned embeddings for the app.
