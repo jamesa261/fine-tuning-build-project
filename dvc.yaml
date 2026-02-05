@@ -9,7 +9,6 @@ stages:
       - synthetic_data/models.py
       - synthetic_data/data/seed_titles.csv
     outs:
-      - synthetic_data/data/jitter_responses.jsonl
       - synthetic_data/data/jittered_titles.csv
     metrics:
       - synthetic_data/metrics/jitter_summary.json

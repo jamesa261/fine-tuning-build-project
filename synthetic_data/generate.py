@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 from pydantic import ValidationError
 from tqdm.auto import tqdm
+from google.genai import types as genai_types
 
 from synthetic_data.clients import build_client, resolve_model
 from synthetic_data.models import TitleVariants
@@ -58,9 +59,24 @@ def load_seed_titles(seed_path: Path) -> pd.DataFrame:
     return df
 
 
-def load_existing_jsonl(path: Path) -> Dict[str, List[str]]:
+def load_existing_jsonl(path: Path, expected_model: Optional[str] = None) -> Dict[str, List[str]]:
+    """
+    Load cached generations if present and, when expected_model is provided,
+    only return the cache if it was produced by the same model. A sidecar
+    `<file>.meta` stores the model used.
+    """
     if not path.exists():
         return {}
+
+    if expected_model is not None:
+        meta_path = path.with_suffix(path.suffix + ".meta")
+        try:
+            meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+        except Exception:
+            meta = {}
+        if meta.get("model") != expected_model:
+            return {}
+
     existing: Dict[str, List[str]] = {}
     for line in path.read_text().splitlines():
         try:
@@ -71,12 +87,14 @@ def load_existing_jsonl(path: Path) -> Dict[str, List[str]]:
     return existing
 
 
-def persist_jsonl(path: Path, records: Iterable[TitleVariants]) -> None:
+def persist_jsonl(path: Path, records: Iterable[TitleVariants], model_used: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
         for record in records:
             f.write(record.model_dump_json(ensure_ascii=False))
             f.write("\n")
+    meta_path = path.with_suffix(path.suffix + ".meta")
+    meta_path.write_text(json.dumps({"model": model_used, "timestamp": time.time()}, indent=2))
 
 
 def build_messages(seed_title: str, num_examples: int) -> List[Dict[str, str]]:
@@ -86,8 +104,8 @@ def build_messages(seed_title: str, num_examples: int) -> List[Dict[str, str]]:
             "role": "user",
             "content": (
                 f"Seed title: {seed_title}\n"
-                f"Return exactly {num_examples} distinct 'in-the-wild' job titles as JSON with "
-                f"keys seed_title and in_the_wild_titles (list of strings). "
+                f"Return exactly {num_examples} distinct 'in-the-wild' job titles as JSON"
+                f"using schema {json.dumps(TitleVariants.model_json_schema())}."
                 "Do not include any prose outside the JSON."
             ),
         },
@@ -124,11 +142,7 @@ async def request_gemini(
     temperature: Optional[float],
     reasoning_effort: str,
 ) -> TitleVariants:
-    thinking_level = translate_reasoning_to_thinking(model, reasoning_effort)
-    config = {
-        "response_mime_type": "application/json",
-        "thinking_level": thinking_level,
-    }
+    config = {"response_mime_type": "application/json"} | build_thinking_config(model, reasoning_effort)
     if temperature is not None:
         config["temperature"] = temperature
 
@@ -140,8 +154,7 @@ async def request_gemini(
                 SYSTEM_PROMPT,
                 "",
                 f"Seed title: {seed_title}",
-                f"Return exactly {num_examples} titles in JSON with keys "
-                f"seed_title and in_the_wild_titles (list of strings).",
+                f"Return exactly {num_examples} titles in JSON format using this schema: {json.dumps(TitleVariants.model_json_schema())}",
             ]
         ),
         config=config,
@@ -167,19 +180,25 @@ def parse_response(seed_title: str, payload: str) -> TitleVariants:
         raise ValueError(f"Invalid payload for {seed_title}: {payload}") from exc
 
 
-def translate_reasoning_to_thinking(model_name: str, reasoning_effort: str) -> str:
+def build_thinking_config(model_name: str, reasoning_effort: str) -> Dict:
     """
-    Map OpenAI-style reasoning levels to Gemini thinking levels.
-    Gemini 3 Pro supports only low/high; Flash supports minimal/low/medium/high.
+    Gemini thinking knobs differ by generation:
+    - Gemini 3*: thinking_level (minimal/low/medium/high)
+    - Gemini 2.5*: thinking_budget (0 disable, -1 dynamic). Use ThinkingConfig.
     """
+    model_lower = model_name.lower()
     level = reasoning_effort.lower()
-    if "gemini-3.0-pro" in model_name:
-        if level in {"high", "medium"}:
-            return "high"
-        return "low"
-    if level not in {"minimal", "low", "medium", "high"}:
-        return "low"
-    return level
+
+    if "gemini-3" in model_lower:
+        if level not in {"minimal", "low", "medium", "high"}:
+            level = "low"
+        return {"thinking_config": genai_types.ThinkingConfig(thinking_level=level)}
+
+    if "gemini-2.5" in model_lower:
+        budget = 0 if level == "minimal" else -1
+        return {"thinking_config": genai_types.ThinkingConfig(thinking_budget=budget)}
+
+    return {}
 
 
 async def generate_variations(
@@ -220,7 +239,7 @@ async def run_pipeline(params: Dict, seed_df: pd.DataFrame) -> Tuple[pd.DataFram
     client = build_client(model_info, api_key_env=params.get("api_key_env"), async_mode=True)
 
     cache_path = Path(params["output_responses"])
-    cached = load_existing_jsonl(cache_path)
+    cached = load_existing_jsonl(cache_path, expected_model=model_info.model)
 
     semaphore = asyncio.Semaphore(params["max_concurrent"])
 
@@ -247,7 +266,7 @@ async def run_pipeline(params: Dict, seed_df: pd.DataFrame) -> Tuple[pd.DataFram
     for coro in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Generating"):
         records.append(await coro)
 
-    persist_jsonl(cache_path, records)
+    persist_jsonl(cache_path, records, model_info.model)
 
     rows = []
     for record in records:
@@ -297,6 +316,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, help="Sampling temperature; omit for reasoning models")
     parser.add_argument("--reasoning-effort", type=str, help="Reasoning level (minimal/low/medium/high)")
     parser.add_argument("--max-concurrent", type=int, help="Maximum concurrent requests")
+    parser.add_argument("--yes", action="store_true", help="Skip confirmation prompt about LLM call volume")
     return parser.parse_args()
 
 
@@ -316,7 +336,22 @@ def main():
     if args.max_concurrent:
         params["max_concurrent"] = args.max_concurrent
 
+    # Inform the user how many new LLM calls will be made (cache-aware) and require confirmation.
+    cache_path = Path(params["output_responses"])
+    cached = load_existing_jsonl(cache_path, expected_model=params["model"])
+
     seed_df = load_seed_titles(Path("synthetic_data/data/seed_titles.csv"))
+    pending_calls = sum(1 for title in seed_df["seed_title"] if title not in cached)
+
+    if not args.yes:
+        prompt = (
+            f"You are about to make {pending_calls} LLM calls with model '{params['model']}' "
+            f"({len(seed_df)} seeds; {len(cached)} cached). Proceed? [y/N] "
+        )
+        if input(prompt).strip().lower() not in {"y", "yes"}:
+            print("Aborted; no requests sent.")
+            return
+
     jitter_df, records, metrics = asyncio.run(run_pipeline(params, seed_df))
     write_outputs(jitter_df, metrics, params)
     print(f"Saved {len(jitter_df)} rows to {params['output_titles']}")

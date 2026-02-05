@@ -18,8 +18,8 @@ class Movie(BaseModel):
 def gemini_demo():
     client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
     response = client.models.generate_content(
-        model="gemini-3.0-flash",
-        contents="Generate a fictional movie about a time-traveling historian.",
+        model="gemini-3-flash-preview",
+        contents=f"Generate a fictional movie about a time-traveling historian.",
         config={
             "response_mime_type": "application/json",
             "response_schema": Movie,
@@ -34,8 +34,9 @@ def openai_demo():
     client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
     response = client.chat.completions.create(
         model="gpt-5-mini",
+        # NOTE: Using structured output in this way for OpenAI models actually REQUIRES mentioning the JSON schema in the prompt.
         messages=[
-            {"role": "user", "content": "Generate a fictional movie about a time-traveling historian."}
+            {"role": "user", "content": f"Generate a fictional movie about a time-traveling historian. Respond in this JSON schema: {json.dumps(Movie.model_json_schema())}"}
         ],
         response_format={"type": "json_object"},
     )

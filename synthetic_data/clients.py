@@ -42,17 +42,17 @@ MODEL_REGISTRY: Dict[str, ModelInfo] = {
         aliases=["gpt4.1-mini", "gpt-4.1mini"],
         description="Cost‑efficient OpenAI baseline compatible with structured outputs.",
     ),
-    "gemini-3-flash": ModelInfo(
-        model="gemini-3.0-flash",
+    "gemini-3-flash-preview": ModelInfo(
+        model="gemini-3-flash-preview",
         provider="google",
-        aliases=["gemini-3.0-flash", "gemini3-flash"],
-        description="Latest Gemini Flash 3.0 fast model.",
+        aliases=["gemini-3-flash", "gemini3-flash"],
+        description="Latest Gemini Flash 3.0 preview model.",
     ),
-    "gemini-3-pro": ModelInfo(
-        model="gemini-3.0-pro",
+    "gemini-2.5-flash-lite": ModelInfo(
+        model="gemini-2.5-flash-lite",
         provider="google",
-        aliases=["gemini3-pro", "gemini-3.0-pro"],
-        description="Gemini Pro 3.0 balanced quality model.",
+        aliases=["gemini-2.5-flash-lite", "gemini2.5-flash-lite", "gemini-2.5-lite"],
+        description="Gemini 2.5 Flash lite variant.",
     ),
     "gemini-2.5-flash": ModelInfo(
         model="gemini-2.5-flash",
@@ -83,15 +83,12 @@ def build_client(model_info: ModelInfo, api_key_env: Optional[str] = None, async
     """Return the correct SDK client for the given model."""
     env_var = api_key_env or ("OPENAI_API_KEY" if model_info.provider == "openai" else "GEMINI_API_KEY")
     api_key = os.getenv(env_var)
-    if not api_key:
-        raise RuntimeError(f"Expected {env_var} to be set for {model_info.provider} calls.")
 
     if model_info.provider == "openai":
         return AsyncOpenAI(api_key=api_key) if async_mode else OpenAI(api_key=api_key)
 
     # google-genai client covers Gemini + Gemma
     return genai.Client(api_key=api_key)
-
 
 def supported_model_names() -> Iterable[str]:
     return MODEL_REGISTRY.keys()
