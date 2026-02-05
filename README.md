@@ -9,7 +9,39 @@ Generate synthetic job titles, train a sentence-transformer on them, and ship ar
 - `dvc.yaml` — Pipelines wiring all stages together.
 - `params.yaml` — Tunable defaults for generation and training.
 
+## Setup
+
+### Virtual Environment
+Using a uv (https://docs.astral.sh/uv/) managed virtual environment is recommended.
+To set this up, run:
+```bash
+uv venv --python=3.13.11
+source .venv/bin/activate
+uv pip compile requirements.in -o requirements.txt --torch-backend=auto
+uv pip sync requirements.txt --torch-backend=auto
+```
+
+### DVC Setup
+To setup DVC, run `dvc init`. If you'd like to set up remote (or pseudo-remote in a folder on your machine), see DVC docs (https://doc.dvc.org/start) on `dvc remote`.
+
+Environment:
+- `OPENAI_API_KEY` for OpenAI models.
+- `GEMINI_API_KEY` for Gemini/Gemma via Google GenAI.
+- Authentication via Google Vertex AI (`gcloud auth login`) + environment variables for `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_CLOUD_PROJECT` & `GOOGLE_CLOUD_LOCATION`
+
 ## Pipelines (DVC)
+
+### Testing with example dataset
+To test the training and streamlit app on the included example dataset (i.e. without running the synthetic data generation):
+```bash
+cp synthetic_data/data/example_jittered_titles.csv synthetic_data/data/jittered_titles.csv
+echo "{}" > synthetic_data/metrics/jitter_summary.json
+dvc commit -df synthetic_data
+```
+
+This assigns the example dataset as the output of the synthetic data generation stage, allowing downstream stages in the pipeline to run with `dvc repro`.
+
+### Run pipeline end-to-end
 1) **synthetic_data**: `python -m synthetic_data.generate --params params.yaml`  
    - Produces `synthetic_data/data/jittered_titles.csv` and `synthetic_data/metrics/jitter_summary.json`.
 2) **fine_tuning**: `python -m fine_tuning.train --params params.yaml`  
@@ -27,21 +59,6 @@ Run a specific stage (+ preceding dependencies)
 ```bash
 dvc repro fine_tuning
 ```
-
-## Setup
-Using a uv (https://docs.astral.sh/uv/) managed virtual environment is recommended.
-To set this up, run:
-```bash
-uv venv --python=3.13.11
-source .venv/bin/activate
-uv pip compile requirements.in -o requirements.txt --torch-backend=auto
-uv pip sync requirements.txt --torch-backend=auto
-```
-
-Environment:
-- `OPENAI_API_KEY` for OpenAI models.
-- `GEMINI_API_KEY` for Gemini/Gemma via Google GenAI.
-- Authentication via Google Vertex AI (`gcloud auth login`) + environment variables for `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_CLOUD_PROJECT` & `GOOGLE_CLOUD_LOCATION`
 
 ## Key Scripts
 - `synthetic_data/generate.py`: async LLM generation with JSON outputs, supports OpenAI & Gemini/Gemma. Configurable via `params.yaml`.
