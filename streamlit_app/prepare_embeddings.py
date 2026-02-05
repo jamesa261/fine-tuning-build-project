@@ -1,5 +1,5 @@
 import os
-import sys
+from pathlib import Path
 
 from sentence_transformers import SentenceTransformer
 import numpy as np
@@ -7,8 +7,9 @@ import pandas as pd
 import torch
 from tqdm import trange
 
-build_project_path = os.environ['BUILD_PROJECT_PATH']
-streamlit_app_data_path = os.path.join(build_project_path, 'streamlit_app', 'data')
+# Resolve project root; fall back to env override if provided
+ROOT = Path(Path(__file__).resolve().parent.parent)
+streamlit_app_data_path = ROOT / 'streamlit_app' / 'data'
 
 def get_device():
     if torch.cuda.is_available():
@@ -17,17 +18,17 @@ def get_device():
         return torch.device("mps")
     return torch.device("cpu")
 
-job_postings_df = pd.read_parquet(os.path.join(streamlit_app_data_path, 'job_postings.parquet'))
+job_postings_df = pd.read_parquet(streamlit_app_data_path / 'job_postings.parquet')
 
 job_titles = job_postings_df['job_posting_title'].to_list()
 
-device = get_device()
+device = str(get_device())
 print(f'Using device: {device}')
 # Load the model
 default_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device=device)
 
-fine_tuned_model_path = os.path.join(streamlit_app_data_path, 'fine_tuned_model')
-fine_tuned_model = SentenceTransformer(fine_tuned_model_path, device=device)
+fine_tuned_model_path = streamlit_app_data_path / 'fine_tuned_model'
+fine_tuned_model = SentenceTransformer(str(fine_tuned_model_path), device=device)
 
 # Compute embeddings
 
@@ -45,10 +46,5 @@ fine_tuned_embeddings = np.concatenate(fine_tuned_embeddings)
 print(fine_tuned_embeddings.shape)
 
 # Save embeddings and sentences
-np.save(os.path.join(streamlit_app_data_path, 'default_embeddings.npy'), default_embeddings)
-np.save(os.path.join(streamlit_app_data_path, 'fine_tuned_embeddings.npy'), fine_tuned_embeddings)
-
-
-# with open('sentences.txt', 'w', encoding='utf-8') as f:
-#     for sentence in sentences:
-#         f.write(f"{sentence}\n")
+np.save(streamlit_app_data_path / 'default_embeddings.npy', default_embeddings)
+np.save(streamlit_app_data_path / 'fine_tuned_embeddings.npy', fine_tuned_embeddings)

@@ -1,6 +1,0 @@
-That's great!
-
-Now please do the same for these query titles, but this time generating {0} 'in-the-wild titles' per 'clean' title:
-
-<query>
-{1}</query>
