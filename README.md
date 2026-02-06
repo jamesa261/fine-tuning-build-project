@@ -62,7 +62,7 @@ dvc repro fine_tuning
 
 ## Streamlit
 
-Once the pipeline has been run (i.e. model trained, moved into `streamlit_app` folder and embeddings generated), you can spin up the web app locally by running `streamlit run streamlit_app/app.py`
+Once the pipeline has been run (i.e. model trained, moved into `streamlit_app` folder and embeddings generated), you can spin up the web app locally by running `streamlit run streamlit_app/app.py` from inside the `streamlit_app` folder.
 
 ## Key Scripts
 - `synthetic_data/generate.py`: async LLM generation with JSON outputs, supports OpenAI & Gemini/Gemma. Configurable via `params.yaml`.
